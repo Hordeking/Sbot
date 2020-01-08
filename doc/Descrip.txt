@@ -1,0 +1,15 @@
+Spiderbot hard-codes the data/code locations. This is where we dump in file form the referenced sections. Optionally can describe them here.
+
+Filename	AtAddr	Length	Length	Purpose
+bootsector.asm	0x0000	512B	1 sector	First Stage Bootloader
+bootload-stg2.bin	0x1c00	2048B	4 sectors	Second Stage Bootloader
+executive	0x2400	148608	many	Real executive. 148608 bytes long.
+
+mzfile.bin is the raw executive, which spiderbot loads from the disk and sets up its header to relocate it. I still have yet to figure out how this is working. Spiderbot loads it to 0x2800 and goes from there. On disk, it's stored a little strangely, The first 8 sectors of cylinders 1-33 in order, then it swings back and copies the 9th sector of cyls 1-26, plus just the bytes required from the 9th sector of the 27th cylinder (128 bytes). All of this one side 0 of the disk. These bytes should add up to precisely 148608 bytes.
+
+Formula is: max_cyls_8sect*8*512 + max_cyls_9thsect*1*512 + bytes_in_final_sect
+
+Spiderbot itself is:
+	Cylinders 1-33, First 8 sectors of each are placed consecutively
+	Cylinders 1-26, 9th sectors consec
+	Culinder 27, first 128 bytes of sector 9
