@@ -1,0 +1,19 @@
+#These changes cause the piracy check to pass and allow the game to run.
+#The piracy check appears to be at 0x53bb of the executable.
+# The check function is called from 0xb727 in the disk image (e8 91 53)
+#   1410:0027 e8 91 53    CALL	FUN_1410_53bb                                     ;Piracy Function
+#It appears the call to the piracy check (call CS:53bb) made at CS:0027 can simply be NOP'd out. It doesn't seem to be called from anywhere else.
+
+33954c33954
+< Seg_1:1410:53f7 b80102          MOV         AX,0x201
+---
+> Seg_1:1410:53f7 b80110          MOV         AX,0x1001
+33958c33958,33959
+< Seg_1:1410:5403 cd13            INT         0x13
+---
+> Seg_1:1410:5403 f9              STC
+> Seg_1:1410:5404 90              NOP
+33965c33966
+< Seg_1:1410:5410 b91000          MOV         CX,0x10
+---
+> Seg_1:1410:5410 b90100          MOV         CX,0x1
