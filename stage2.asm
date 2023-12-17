@@ -72,7 +72,7 @@ jmp begin
 	word_0000_1129 dw 0
 
 	times 2 db 0
-	
+
 	; TODO: Make local_retries_left local to fn_load_executive
 	local_retries_left db 0						; Possibly a countdown. Set to 3 in fn_load_executive if.cylinders_left != 0
 
@@ -80,7 +80,7 @@ jmp begin
 	targloc:
 		.off dw 0						; goes into the si register later
 		.seg dw 0x200					; gets loaded into register es later
-	
+
 	; This is a struct that tells where the rest of the data is
 	executive_target:
 		.cylinder			db 0x01
@@ -89,16 +89,16 @@ jmp begin
 		.sect9cyl			db 0x01
 		.sect9cyl_left		db 0x1A
 		.nBytesLastSect		dw 0x0080
-	
+
 	; This is the source of the previous one. Also good as a backup.
 	const_default_executive_target:
 		.cylinder			db 0x01		; CHS Cylinder where data is
 		.head				db 0x00		; CHS Head where data is
 		.cylinders_max		db 0x21		; cylinders to read + 1
-		.sect9cyl			db 0x01		; Sector 9 current cyl 
+		.sect9cyl			db 0x01		; Sector 9 current cyl
 		.sect9cyl_max		db 0x1A		; Sector 9 cyls to rd + 1
 		.nBytesLastSect		dw 0x0080	; Number of bytes from final sector
-	
+
 	;Explanation of the above struct:
 	;	The executive is stored a little strangely. It isn't stored linearly.
 	;	Each side of each cylinder has 9 sectors. Only one side is actually
@@ -127,7 +127,7 @@ begin:
 	mov ax, cs
 	mov ds, ax
 	mov es, ax
-	
+
 	; Set the stack pointer (stack size: 0x120)
 	; (Why isn't the stack pointer aligned to a 4B boundary?)
 	cli
@@ -135,7 +135,7 @@ begin:
 	mov sp, bx
 	mov ss, ax
 	sti
-	
+
 	mov byte [global_retry_count], 0x3	; Set the retry count to 3
 
 label_0000_1177:
@@ -144,7 +144,7 @@ label_0000_1177:
 	; These appear to be the default location where the executive goes.
 	mov word [targloc.seg], 0x280
 	mov word [targloc.off], 0x0
-	
+
 	; Copy const_default_executive_target into executive_target
 	mov si, const_default_executive_target
 	mov di, executive_target
@@ -198,13 +198,13 @@ label_0000_11b9:
 	mov es, ax						;es = 0x6b0 (segment points at 0x6b00)
 	mov di, [si]					;di = 0x18
 	mov ax, [es:di]					;ax = [0018:06b0]
-	add ax, [cs:word_0000_1127]		;ax = 
+	add ax, [cs:word_0000_1127]		;ax =
 	stosw
 	add si, byte +0x4
 	loop label_0000_11b9
 
 ; This stuff saves the interrupt vector and sets the one provided below.
-	
+
 	; Then it installs the interrupt, for some reason.
 	; It appears to take over int 0x21
 	; Possibly used as a way to reload the game at some point?
@@ -236,17 +236,17 @@ fn_load_executive:
 	; This function appears to be responsible for loading the executive
 	; Technically, the caller should be pushing the args onto the stack
 	; and cleaning up afterwards, not using globals to pass around things.
-	
+
 	; It stores the executive in an odd format, but basically builds the executive
 	; from the blocks on the disk like this:
-	
+
 	; From cylinders 1-32, it works upward through each cylinder, placing the first 8
 	; sectors of each cylinder consecutively in memory at the target location.
 	; Then it swings back through cylinders 1-16 (not the same number of cylinders
 	; as before), placing the 9th sector of each consecutively. Finally, there's
 	; one further 9th sector one cylinder out, but this is a partial sector, so
 	; we have to copy this one byte by byte.
-	
+
 	; Once the executive is built, it can be executed.
 
 		; Save ds, es
@@ -257,7 +257,7 @@ fn_load_executive:
 		mov ax, cs
 		mov ds, ax
 		mov es, ax
-		
+
 		cmp byte [executive_target.cylinders_left], 0x0		; if we have zero cylinders left, go ahead and skip ahead.
 		jz .sect9_loads
 
@@ -282,14 +282,14 @@ fn_load_executive:
 		; int 0x13(ah=2) sets the carry flag if it encountered an error.
 		mov ax, 0x208
 		int 0x13
-		
+
 		jnc .buffer_to_targloc		; If no error, CF is clear, jump past. If error, fall through
 
 		; If read failed, we get here.
 		; Reset the disk system, decrement the retry counter, and try again.
 		sub ax, ax
 		int 0x13						; AX=0 + int 0x13 -> Reset disk system.
-		
+
 		dec byte [local_retries_left]		; Decrement the retry counter
 		jnz .label_0000_1217			; Try again.
 		jmp .read_failure_exit			; Oops, no more retries. Exit with a failure.
@@ -304,14 +304,14 @@ fn_load_executive:
 		mov cx, 0x800
 		cld
 		rep movsw
-		
+
 		add word [targloc.seg], 0x100			; targloc.seg += 0x100 Advance targloc by 8 sectors
 		inc byte [executive_target.cylinder]	; Move to the next cylinder
 		dec byte [executive_target.cylinders_left]	; cylinders_left--
 		jnz .load_next_batch
 
 
-	; Once we've loaded the 32 cylinders (cyl 1 through cyl 32), we get here. 
+	; Once we've loaded the 32 cylinders (cyl 1 through cyl 32), we get here.
 	; Or if cylinders_left == 0 at the very beginning, skip to here.
 
 	.sect9_loads:
@@ -322,8 +322,8 @@ fn_load_executive:
 		mov byte [local_retries_left], 0x3
 
 	.label_0000_1269:
-	
-		; This reads the 9th sector from the current cylinder(?)	
+
+		; This reads the 9th sector from the current cylinder(?)
 		mov dh, [executive_target.head]
 		mov dl, 0x0
 		mov ch, [executive_target.sect9cyl]
@@ -365,7 +365,7 @@ fn_load_executive:
 
 		; Read one (1) sector from the last cylinder which, is the last cylinder
 		; previously used +1
-		
+
 		; Grab the sector from disk
 		mov dh, [executive_target.head]
 		mov dl, 0x0
