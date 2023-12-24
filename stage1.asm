@@ -46,19 +46,19 @@ begin:
 	mov byte [retries_left], 0xa	; Retry 10 times before failing
 	nop
 
-load_executive_from_disk:
+load_stage2_from_disk:
 
 	; Load Sectors from Disk
 
 	xor ax, ax
 	mov es, ax
-	mov bx, 0x1000					; Destination address 0000:1000
+	mov bx, 0x1000				; Destination address 0000:1000
 
 	mov dl, 0x0					; Disk 0 (FD0)
 	mov dh, 0x1					; Head 1
 	mov ch, 0x0					; Cylinder 0
 	mov cl, 0x6					; Sector 0x06
-	mov ax, 0x204					; Int 13h fn 2, 4 sectors
+	mov ax, 0x204				; Int 13h fn 2, 4 sectors
 	int 0x13					; Read 4 sectors from disk
 
 	test ah, 0xdb					; Check return value
@@ -69,7 +69,7 @@ load_executive_from_disk:
 	int 0x13
 
 	dec byte [retries_left]				; Decrement the reset tries
-	jnz load_executive_from_disk			; Retry loading
+	jnz load_stage2_from_disk			; Retry loading
 	int 0x19					; Reboot w/o memory clear
 
 success:
