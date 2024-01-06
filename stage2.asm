@@ -27,59 +27,52 @@ jmp begin
 
 	dw 0	; Looks blank
 
-	; TODO: Not sure what this .offset is, it's used in the int 21h handler. Find out what it is.
-	mz_entry_point:
-		.seg dw 0		; Used to store 0x280+[pEXE+0x08], this is a segment pointer of some kind.
+	; This is just a temp variable used as a far pointer.
+	; The primary use is to determine the segment the exe data actually starts at (to do the relocations)
+	; It's also used in the interrupt handler as a destination for the loaded file.
+	global_far_pointer:
+		.seg dw 0		; Used to store 0x280+[pEXE.headerlength]. Also used in int 21h.
 		.offset dw 0	; Used by int 21h that this bootloader sets up.
 
 	times 2 db 0
 
-	; TODO: Make local_retries_left local to fn_load_executive
-	local_retries_left db 0						; Possibly a countdown. Set to 3 in fn_load_executive if.cylinders_left != 0
+	; TODO: Make local_retries_left local to fn_load_file
+	local_retries_left db 0						; Possibly a countdown. Set to 3 in fn_load_file if .nCylinders != 0
 
-	; This is the final target location segment:offset
-	targloc:
+	; This is used by fn_load_file in the manner of a global struct to know where to put the loaded data.
+	; The whoever calls fn_load_file needs to set these before calling it.
+	global_ram_destination:
 		.off dw 0						; goes into the si register later
 		.seg dw 0x200					; gets loaded into register es later
 
-	; This is a struct that tells where the rest of the data is
-	executive_target:
-		.cylinder			db 0x01
-		.head				db 0x00
-		.cylinders_left		db 0x21
-		.sect9cyl			db 0x01
-		.sect9cyl_left		db 0x1A
-		.nBytesLastSect		dw 0x0080	
-
-	; This is the source of the previous one. Also good as a backup.
-	const_default_executive_target:
+	; This is used by fn_load_file in the manner of a global struct to know where to load from.
+	; The whoever calls fn_load_file needs to copy data here before calling it.
+	global_file_source:
 		.cylinder			db 0x01		; CHS Cylinder where data is
 		.head				db 0x00		; CHS Head where data is
-		.cylinders_max		db 0x21		; cylinders to read
-		.sect9cyl			db 0x01		; Sector 9 current cyl
-		.sect9cyl_max		db 0x1A		; Sector 9 cyls to rd
+		.nCylinders			db 0x21		; Number of cylinders to read
+		.sect9cyl			db 0x01		; Sector 9 begin cylinder
+		.nSect9cyl			db 0x1A		; Number of sector 9 cyls to rd
 		.nBytesLastSect		dw 0x0080	; Number of bytes from final sector. This is not part of the sect9cyls
 
 	;Explanation of the above struct:
-	;	The executive is stored a little strangely. It isn't stored linearly.
-	;	Each side of each cylinder has 9 sectors. Only one side is actually
-	;	used. Essentially we concatenate the first 8 sectors of each cylinder
-	;	cyl[0x01] thru cyl[0x20]. Then we circle back and do something
-	;	similar for just the 9th sector of each cylinder, in our case, cyl[0x01]
-	;	thru cyl[0x19]. Finally, we grab the 9th sector of the /next/ cylinder
-	;	but we don't need the whole thing, so we just read the bytes we do need.
-	;	It doesn't make much sense to me, either, unless it's related to how it
-	;	was stored on the Commodore 64 or something.
+	;	Start at .cylinder, copy first 8 sectors, increment cylinder. Do this .nCylinders times.
+	;	Continue at .sect9Cyl, copy 1 sector, increment cylinder. Do this .nSect9cyl times.
+	;	Continue as in the previous step, but only copy nBytesLastSect from that sector.
+	;	Each step just concatenates its data onto the last.
+	;	Please see File_On_Disk_Structure.txt for far more detail.
 
 	; Don't know what this is yet, but the interrupt uses it.
-	DAT_0000_1140 dw 0x23
+	
+	ondisk_mz_exec:
+				db 0x01, 0x00, 0x21, 0x01, 0x1a, 0x80, 0x00		; The main executive
 
-	; Definitely not random data. Not sure what it is yet, but it's required to
-	; run the part of the executive after the joystick config.
-	;times 0x21 db 0
-	db 0x04,
-	db 0x00, 0x00, 0x00, 0x00, 0x22, 0x00, 0x01, 0x22, 0x01, 0x38, 0x00, 0x01, 0x01, 0x0D, 0x01, 0x07,
-	db 0x62, 0x00, 0x0E, 0x01, 0x0F, 0x0E, 0x06, 0x74, 0x01, 0x1D, 0x01, 0x09, 0x1D, 0x07, 0x5D, 0x00
+	ondisk_files:
+		file0	db 0x23, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00
+		file1	db 0x22, 0x00, 0x01, 0x22, 0x01, 0x38, 0x00
+		file2	db 0x01, 0x01, 0x0d, 0x01, 0x07, 0x62, 0x00
+		file3	db 0x0e, 0x01, 0x0f, 0x0e, 0x06, 0x74, 0x01
+		file4	db 0x1d, 0x01, 0x09, 0x1d, 0x07, 0x5d, 0x00
 
 ; Code begins in earnest
 begin:
@@ -102,19 +95,19 @@ retrieve_mz_exec:
 
 	; Not sure what these two do, refers to 0280:0000 aka addr 0x2800
 	; These appear to be the default location where the executive goes.
-	mov word [targloc.seg], 0x280
-	mov word [targloc.off], 0x0
+	mov word [global_ram_destination.seg], 0x280
+	mov word [global_ram_destination.off], 0x0
 
-	; Copy const_default_executive_target into executive_target
-	mov si, const_default_executive_target
-	mov di, executive_target
+	; Copy ondisk_mz_exec into global_file_source
+	mov si, ondisk_mz_exec
+	mov di, global_file_source
 	mov cx, 0x7
 	cld							; Probably redundant, clear the direction flag
 	rep movsb					; Copy bytes from si to di while cx > 0
 
-	call fn_load_executive		; This loads the executive from disk.
+	call fn_load_file			; This loads the executive from disk.
 
-	jnc executive_was_loaded		; if fn_load_executive does not set the carry bit, it was successful. Advance
+	jnc executive_was_loaded		; if fn_load_file does not set the carry bit, it was successful. Advance
 	dec byte [global_retry_count]	; decrement the retry counter
 	jnz retrieve_mz_exec			; Try again. When the counter hits zero, reboot.
 	int 0x19						; Reboots the system without clearing memory or restoring interrupt vectors.
@@ -128,18 +121,18 @@ executive_was_loaded:
 		; parts, like the code and data segments, along with the starting addresses
 		; Only then can we jump to that.
 
-		; Retrieve the word at 0280:0008, add 0x280 to that, and save it in mz_entry_point.seg
+		; Retrieve the word at 0280:0008, add 0x280 to that, and save it in global_far_pointer.seg
 		; 0280:0008 is somewhere in the executive we loaded earlier
 	mov ax, 0x280
 	mov ds, ax
 	mov si, 0x8
 	lodsw							; Load word from ds:si = 0280:0008
 	add ax, 0x280
-	mov [cs:mz_entry_point.seg], ax		; mz_entry_point.seg = [0280:0008] + 0x280
-		; Executive has 0x0020 at 0280:0008, thus [cs:mz_entry_point.seg] = 0x2a0
+	mov [cs:global_far_pointer.seg], ax		; global_far_pointer.seg = [0280:0008] + 0x280
+		; Executive has 0x0020 at 0280:0008, thus [cs:global_far_pointer.seg] = 0x2a0
 		; Is this where the exe code starts in ram?
 		; If the exe is loaded at 0280:0000 and the header is 0x20 paragrahs long, it should start at 02a0:0000.
-		; We have done mz_entry_point.seg = 0x280+EXE.header_paragraphs=0x2a0
+		; We have done global_far_pointer.seg = 0x280+EXE.header_paragraphs=0x2a0
 
 	mov si, 0x6						; ds still equals 0x280
 	lodsw
@@ -193,11 +186,11 @@ adjust_relocations:
 
 	;This code cycles through each entry in the relocation table
 	mov ax, [si+0x2]				; Fetch relocation entry
-	add ax, [cs:mz_entry_point.seg]	; Adjust it to account for the segment we loaded the file AND the paragraph length of the header
+	add ax, [cs:global_far_pointer.seg]	; Adjust it to account for the segment we loaded the file AND the paragraph length of the header
 	mov es, ax						; Now the relocation entry points at the actual segment in memory there the subject is
 	mov di, [si]					; Offset within that paragraph stays the same
 	mov ax, [es:di]					; Retrieve the subject
-	add ax, [cs:mz_entry_point.seg]	; Offset the the subject by the same amount. This is the segment of a far reference.
+	add ax, [cs:global_far_pointer.seg]	; Offset the the subject by the same amount. This is the segment of a far reference.
 	stosw							; Store it back, adjusted.
 	add si, byte +0x4				; Increment which relocation table entry we're pointing at.
 	loop adjust_relocations			; One down, get the next one that we just pointed at.
@@ -205,7 +198,7 @@ adjust_relocations:
 	;This bit also adjusts the entry point in the header itself
 	mov si, 0x16
 	mov ax, [si]					; ax = *(pEXE+0x16) = 0x410
-	add ax, [cs:mz_entry_point.seg]	; Adjust entry point as well.
+	add ax, [cs:global_far_pointer.seg]	; Adjust entry point as well.
 	mov [si], ax					; Store it back
 
 	; Install the new int 0x21 handler.
@@ -221,7 +214,7 @@ install_int_21:
 
 	; Set stack to what the EXE wants.
 	mov ax, [0xe]					; ax = preferred stack segment pEXE.ss
-	add ax, [cs:mz_entry_point.seg]	; Adjust the preferred stack segment to absolute terms.
+	add ax, [cs:global_far_pointer.seg]	; Adjust the preferred stack segment to absolute terms.
 	cli								; Don't want interrupts while doing this
 	mov ss, ax						; Set stack segment to preferred pEXE.ss
 	mov sp, [0x10]					; Set stack segment to preferred pEXE.sp
@@ -233,11 +226,11 @@ install_int_21:
 ;=========================================================================
 ; Called to load the executive.
 ; 
-; Uses a global struct at cs:executive_target to fetch the data from disk.
+; Uses a global struct at cs:global_file_source to fetch the data from disk.
 ; Always loads data to 0280:0000.
 ;=========================================================================
 
-fn_load_executive:
+fn_load_file:
 
 	; Load the executive from disk.
 	; Returns 0 if successful, 1 if fail
@@ -269,7 +262,7 @@ fn_load_executive:
 		mov ds, ax
 		mov es, ax
 
-		cmp byte [executive_target.cylinders_left], 0x0		; if we have zero cylinders left, go ahead and skip ahead.
+		cmp byte [global_file_source.nCylinders], 0x0		; if we have zero cylinders left, go ahead and skip ahead.
 		jz .sect9_loads
 
 	.load_next_batch:
@@ -279,9 +272,9 @@ fn_load_executive:
 
 		; We're going to copy sectors from the disk to our target location.
 		; This is probably the REAL executive.
-		mov dh, [executive_target.head]				; Copy head (head) into dh
+		mov dh, [global_file_source.head]				; Copy head (head) into dh
 		mov dl, 0x0									; dl = 0 (disk 0x00 aka first floppy)
-		mov ch, [executive_target.cylinder]			; Copy cylinder (cylinder) into ch
+		mov ch, [global_file_source.cylinder]			; Copy cylinder (cylinder) into ch
 		mov cl, 0x1									; cl = 1 (sector 1)
 		mov bx, buffer								; Set destination buffer
 
@@ -294,7 +287,7 @@ fn_load_executive:
 		mov ax, 0x208
 		int 0x13
 
-		jnc .buffer_to_targloc		; If no error, CF is clear, jump past. If error, fall through
+		jnc .buffer_to_target		; If no error, CF is clear, jump past. If error, fall through
 
 		; If read failed, we get here.
 		; Reset the disk system, decrement the retry counter, and try again.
@@ -305,28 +298,28 @@ fn_load_executive:
 		jnz .load_part_one			; Try again.
 		jmp .read_failure_exit			; Oops, no more retries. Exit with a failure.
 
-	.buffer_to_targloc:
+	.buffer_to_target:
 
-		; Looks like we're going to copy the 8 sectors from the buffer to [targloc.seg:targloc.off]
+		; Looks like we're going to copy the 8 sectors from the buffer to [global_ram_destination]
 		; According to the bootloader, that's going to start at 0280:0000 or 0x2800
 		mov si, buffer
-		mov di, [targloc.off]
-		mov es, [targloc.seg]
+		mov di, [global_ram_destination.off]
+		mov es, [global_ram_destination.seg]
 		mov cx, 0x800
 		cld
 		rep movsw
 
-		add word [targloc.seg], 0x100			; targloc.seg += 0x100 Advance targloc by 8 sectors
-		inc byte [executive_target.cylinder]	; Move to the next cylinder
-		dec byte [executive_target.cylinders_left]	; cylinders_left--
+		add word [global_ram_destination.seg], 0x100			; global_ram_destination.seg += 0x100 Advance global_ram_destination by 8 sectors
+		inc byte [global_file_source.cylinder]	; Move to the next cylinder
+		dec byte [global_file_source.nCylinders]	; nCylinders--
 		jnz .load_next_batch
 
 
 	; Once we've loaded the 32 cylinders (cyl 1 through cyl 32), we get here.
-	; Or if cylinders_left == 0 at the very beginning, skip to here.
+	; Or if nCylinders == 0 at the very beginning, skip to here.
 
 	.sect9_loads:
-		cmp byte [executive_target.sect9cyl_left], 0x0	; If no cyls left, skip ahead.
+		cmp byte [global_file_source.nSect9cyl], 0x0	; If no cyls left, skip ahead.
 		jz .check_for_nBytes_at_end
 
 	.label_0000_1264:
@@ -335,9 +328,9 @@ fn_load_executive:
 	.label_0000_1269:
 
 		; This reads the 9th sector from the current cylinder(?)
-		mov dh, [executive_target.head]
+		mov dh, [global_file_source.head]
 		mov dl, 0x0
-		mov ch, [executive_target.sect9cyl]
+		mov ch, [global_file_source.sect9cyl]
 		mov cl, 0x9
 		mov bx, buffer
 		push cs
@@ -357,30 +350,30 @@ fn_load_executive:
 
 	.label_0000_128e:
 		mov si, buffer
-		mov di, [targloc.off]
-		mov es, [targloc.seg]
+		mov di, [global_ram_destination.off]
+		mov es, [global_ram_destination.seg]
 		mov cx, 0x100
 		cld
 		rep movsw
-		add word [targloc.seg], byte +0x20		; targloc.seg += 0x20 Advance targloc one (1) sector
-		inc byte [executive_target.sect9cyl]		; Advance cylinder to next
-		dec byte [executive_target.sect9cyl_left]		; sect9cyl_left--
+		add word [global_ram_destination.seg], byte +0x20		; global_ram_destination.seg += 0x20 Advance global_ram_destination one (1) sector
+		inc byte [global_file_source.sect9cyl]		; Advance cylinder to next
+		dec byte [global_file_source.nSect9cyl]		; nSect9cyl--
 		jnz .label_0000_1264
 
 	.check_for_nBytes_at_end:
-		cmp word [executive_target.nBytesLastSect], byte +0x0	; If nBytesLastSect is zero, skip ahead to success.
+		cmp word [global_file_source.nBytesLastSect], byte +0x0	; If nBytesLastSect is zero, skip ahead to success.
 		jz .exit_success
 		mov byte [local_retries_left], 0x3
 
 	.read_nLastBytes:
 
 		; Read one (1) sector from the last cylinder which, is the last cylinder
-		; previously used +1
+		; previously used +1 (it gets incremented each time we finish a cylinder)
 
 		; Grab the sector from disk
-		mov dh, [executive_target.head]
+		mov dh, [global_file_source.head]
 		mov dl, 0x0
-		mov ch, [executive_target.sect9cyl]
+		mov ch, [global_file_source.sect9cyl]
 		mov cl, 0x9
 		mov bx, buffer
 		push cs
@@ -406,10 +399,10 @@ fn_load_executive:
 
 	.label_0000_12e3:
 		;Copy number of bytes in nBytesLastSect from buffer to the target location
-		mov di, [targloc.off]
-		mov es, [targloc.seg]
+		mov di, [global_ram_destination.off]
+		mov es, [global_ram_destination.seg]
 		mov si, buffer
-		mov cx, [executive_target.nBytesLastSect]
+		mov cx, [global_file_source.nBytesLastSect]
 		cld
 		rep movsb
 
@@ -423,14 +416,14 @@ fn_load_executive:
 ;======================================================
 ; This appears to be replacing int 0x21
 ;
-; AL = Functions 0, 1, 2, 3
+; AL = Valid inputs 0, 1, 2, 3, 4
 ; DS = target seg
 ; DX = target offset
 ;
 ;======================================================
 
 ; Notes: It looks like whoever calls int 21h has to set up an
-; executive_target structure at offset 0x223, 0x22a, 0x231, or 0x38.
+; global_file_source structure at offset 0x223, 0x22a, 0x231, or 0x38.
 ; It's the same format as used by the default bootloader.
 
 interrupt_21h:
@@ -445,8 +438,8 @@ interrupt_21h:
 		push es
 		
 		; Save 
-		mov [cs:targloc.off], dx		; [targloc.off] = dx
-		mov [cs:targloc.seg], ds		; [targloc.seg] = ds
+		mov [cs:global_ram_destination.off], dx		; [global_ram_destination.off] = dx
+		mov [cs:global_ram_destination.seg], ds		; [global_ram_destination.seg] = ds
 
 		sti
 		
@@ -458,20 +451,28 @@ interrupt_21h:
 		
 		sub ah, ah							; Zero out AH
 		cmp al, 0x4
-		ja .clean_up_and_exit				; Apparently valid ax = {0,1,2,3}
+		ja .clean_up_and_exit				; Apparently valid ax = {0,1,2,3,4}
+
 		mov cl, 0x7
-		mul cl								; ax = al*0x07 = {0x00, 0x07, 0x0E, 0x15}
-		add ax, DAT_0000_1140				; ax = {0x23, 0x2a, 0x31, 0x38}
-		mov [cs:mz_entry_point.offset], ax	; Set the offset to one of these particular values
+		mul cl								; ax = al*0x07 = {0x00, 0x07, 0x0E, 0x15, 0x1c}
+		add ax, ondisk_files				; ax = {1140, 1147, 114E, 1155, 115C}
+		mov [cs:global_far_pointer.offset], ax	; Set the offset to one of these particular values
+
+		; At this point, cs:global_far_pointer.offset should be pointing at file[0-4]'s location.
+
 		mov byte [cs:global_retry_count], 0xa	; Set up to retry loading the exec 10 times.
 
 	.read_from_disk:
-		mov si, [cs:mz_entry_point.offset]
-		mov di, executive_target
+
+		; Copy the struct to the global fn_load_file uses.
+		mov si, [cs:global_far_pointer.offset]
+		mov di, global_file_source
 		mov cx, 0x7
 		cld
 		rep movsb
-		call fn_load_executive		; Load executive from wherever whoever called int 21h wants to I guess.
+
+		; fn_load_file(global_ram_destination, global_file_source)
+		call fn_load_file		; Load executive from wherever whoever called int 21h wants to I guess.
 		jnc .clean_up_and_exit
 		dec byte [global_retry_count]
 		jnz .read_from_disk
