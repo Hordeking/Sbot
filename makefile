@@ -1,4 +1,4 @@
-all: stage2 stage1 sbot.com
+all: stage2.bin stage1.bin sbot.com
 
 spiderbot.img: stage1 stage2 sbot.com
 	@dd if=/dev/zero of=Spiderbot.img bs=512 count=720 2>/dev/null
@@ -10,9 +10,9 @@ spiderbot.img: stage1 stage2 sbot.com
 sbot.com: sbot.asm
 	nasm sbot.asm -Ox -fbin -osbot.com
 
-stage2:	stage2.asm
+stage2.bin: stage2.asm
 	nasm stage2.asm -Ox -fbin -ostage2.bin
 
-stage1:	stage1.asm 
+stage1.bin: stage1.asm
 	nasm stage1.asm -Ox -fbin -ostage1.bin
 

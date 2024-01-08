@@ -12,6 +12,8 @@
 bits 16
 org 0x1000
 
+pExe equ 0x280		; Segment pointer to loaded Exe. Original Spiderbot used 0x280
+
 jmp begin
 
 ; Data block
@@ -23,7 +25,7 @@ jmp begin
 	; The extra byte is unknown, is at 0x1123.	
 	db 0	; DATA_0000_1123, no references to it.
 
-	global_retry_count db 0	; Appears to be a boot attempt countdown
+	global_retry_count db 0	; How many times to retry a file read.
 
 	dw 0	; Looks blank
 
@@ -31,7 +33,7 @@ jmp begin
 	; The primary use is to determine the segment the exe data actually starts at (to do the relocations)
 	; It's also used in the interrupt handler as a destination for the loaded file.
 	global_far_pointer:
-		.seg dw 0		; Used to store 0x280+[pEXE.headerlength]. Also used in int 21h.
+		.seg dw 0		; Used to store pExe+pEXE.headerlength. Also used in int 21h.
 		.offset dw 0	; Used by int 21h that this bootloader sets up.
 
 	times 2 db 0
@@ -55,20 +57,19 @@ jmp begin
 		.nSect9cyl			db 0x1A		; Number of sector 9 cyls to rd
 		.nBytesLastSect		dw 0x0080	; Number of bytes from final sector. This is not part of the sect9cyls
 
-	;Explanation of the above struct:
+	; Explanation of the above struct:
 	;	Start at .cylinder, copy first 8 sectors, increment cylinder. Do this .nCylinders times.
 	;	Continue at .sect9Cyl, copy 1 sector, increment cylinder. Do this .nSect9cyl times.
 	;	Continue as in the previous step, but only copy nBytesLastSect from that sector.
 	;	Each step just concatenates its data onto the last.
 	;	Please see File_On_Disk_Structure.txt for far more detail.
 
-	; Don't know what this is yet, but the interrupt uses it.
-	
+	; These are the pointers to the files used in this game.
 	ondisk_mz_exec:
 				db 0x01, 0x00, 0x21, 0x01, 0x1a, 0x80, 0x00		; The main executive
 
 	ondisk_files:
-		file0	db 0x23, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00
+		file0	db 0x23, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00		; Splash screen
 		file1	db 0x22, 0x00, 0x01, 0x22, 0x01, 0x38, 0x00
 		file2	db 0x01, 0x01, 0x0d, 0x01, 0x07, 0x62, 0x00
 		file3	db 0x0e, 0x01, 0x0f, 0x0e, 0x06, 0x74, 0x01
@@ -93,9 +94,8 @@ begin:
 
 retrieve_mz_exec:
 
-	; Not sure what these two do, refers to 0280:0000 aka addr 0x2800
-	; These appear to be the default location where the executive goes.
-	mov word [global_ram_destination.seg], 0x280
+	; Set global_ram_destination paramater = pExe:0000 for fn_load_file
+	mov word [global_ram_destination.seg], pExe
 	mov word [global_ram_destination.off], 0x0
 
 	; Copy ondisk_mz_exec into global_file_source
@@ -105,6 +105,7 @@ retrieve_mz_exec:
 	cld							; Probably redundant, clear the direction flag
 	rep movsb					; Copy bytes from si to di while cx > 0
 
+	; fn_load_file(pExe:0000, ondisk_mz_exec).
 	call fn_load_file			; This loads the executive from disk.
 
 	jnc executive_was_loaded		; if fn_load_file does not set the carry bit, it was successful. Advance
@@ -112,45 +113,39 @@ retrieve_mz_exec:
 	jnz retrieve_mz_exec			; Try again. When the counter hits zero, reboot.
 	int 0x19						; Reboots the system without clearing memory or restoring interrupt vectors.
 
-; We have our executive loaded.
+
+; We have our executive loaded. Now we need to set up the relocation table.
+; We're reading the exe and making adjustments to the far pointers in it.
 executive_was_loaded:
-	cld							; Probably redundant, clear the direction flag
 
-		; Since the executive looks like it actually has some sort of exe structure
-		; (it isn't just a flat binary), we need to read it and pull out the important
-		; parts, like the code and data segments, along with the starting addresses
-		; Only then can we jump to that.
+	%define pExe.nRelocations 0x06
+	%define pExe.sizeHeader 0x08
+	%define pExe.ss 0x0e
+	%define pExe.sp 0x10
+	%define pExe.entry 0x14
+	%define pExe.cs 0x16
+	%define pExe.reloc_table_offset 0x18
 
-		; Retrieve the word at 0280:0008, add 0x280 to that, and save it in global_far_pointer.seg
-		; 0280:0008 is somewhere in the executive we loaded earlier
-	mov ax, 0x280
+	cld
+	
+	; Basic MZ Exe structure: Header{Options, Relocation_Table}, Payload
+
+	; Read the exe header, compute the absolute segment where the payload starts
+	mov ax, pExe
 	mov ds, ax
-	mov si, 0x8
-	lodsw							; Load word from ds:si = 0280:0008
-	add ax, 0x280
-	mov [cs:global_far_pointer.seg], ax		; global_far_pointer.seg = [0280:0008] + 0x280
-		; Executive has 0x0020 at 0280:0008, thus [cs:global_far_pointer.seg] = 0x2a0
-		; Is this where the exe code starts in ram?
-		; If the exe is loaded at 0280:0000 and the header is 0x20 paragrahs long, it should start at 02a0:0000.
-		; We have done global_far_pointer.seg = 0x280+EXE.header_paragraphs=0x2a0
+	mov si, pExe.sizeHeader
+	lodsw							; Load word from ds:si = pExe:0008
+	add ax, pExe					; ax = pExe + [pExe:0008]
+	mov [cs:global_far_pointer.seg], ax		; global_far_pointer.seg = pExe + pExe.sizeHeader
 
-	mov si, 0x6						; ds still equals 0x280
-	lodsw
-	mov cx, ax						; cx = [0280:0006] (is this the number of relocation entries?)
-		; Executive has 0x0060 at 0280:0006, our counter is loaded with 0x60 (96d)
-		; We have done cx = EXE.num_relocs
+	mov si, pExe.nRelocations
+	lodsw							; Load word from ds:si = pExe:0006
+	mov cx, ax						; cx = pExe.num_relocs
 
-		; This looks like it's determining the relocation table offset from the exec.
-		; si = [0280:0018] reloc_table_offset
-	mov si, 0x18					; ds still equals 0x280
-	lodsw
-	mov si, ax						; si = [0x2818]
-		; Executive has 0x001e stored at 0280:0018, so now si = 0x1e
-		; Effectively we now have si = EXE.reloc_table_offset
+	mov si, pExe.reloc_table_offset	; ds:si = [pExe:reloc_table_offset]
+	lodsw							; ax = pExe + [pExe:0018]
+	mov si, ax						; si = [pExe.reloc_table_offset]
 
-
-
-adjust_relocations:
 
 ; reloc_table_offset[i] is an array of pointers.
 ;
@@ -184,50 +179,62 @@ adjust_relocations:
 ;  In the example above, Local 0410:0018 (absolute 06b0:0018) points at a far pointer 0d38:xxxx (local).
 ;  Adjusted, it becomes 1088:xxxx (absolute).
 
+adjust_relocations:
+
+	; Parameters:
+	; 	cs:global_far_pointer.seg = the payload begin paragraph
+	;	ds:si points at the first relocation etable entry
+	;	cx is set to the number of relocation entries
+
 	;This code cycles through each entry in the relocation table
-	mov ax, [si+0x2]				; Fetch relocation entry
+	mov ax, [si+0x2]					; Fetch relocation entry
 	add ax, [cs:global_far_pointer.seg]	; Adjust it to account for the segment we loaded the file AND the paragraph length of the header
-	mov es, ax						; Now the relocation entry points at the actual segment in memory there the subject is
-	mov di, [si]					; Offset within that paragraph stays the same
-	mov ax, [es:di]					; Retrieve the subject
+	mov es, ax							; Now the relocation entry points at the actual segment in memory there the subject is
+	mov di, [si]						; Offset within that paragraph stays the same
+	mov ax, [es:di]						; Retrieve the subject
 	add ax, [cs:global_far_pointer.seg]	; Offset the the subject by the same amount. This is the segment of a far reference.
-	stosw							; Store it back, adjusted.
-	add si, byte +0x4				; Increment which relocation table entry we're pointing at.
-	loop adjust_relocations			; One down, get the next one that we just pointed at.
+	stosw								; Store it back, adjusted.
+	add si, byte +0x4					; Increment which relocation table entry we're pointing at.
+	loop adjust_relocations				; One down, get the next one that we just pointed at.
 
 	;This bit also adjusts the entry point in the header itself
-	mov si, 0x16
-	mov ax, [si]					; ax = *(pEXE+0x16) = 0x410
+	mov si, pExe.cs
+	mov ax, [si]						; ax = *(pEXE+0x16) = 0x410
 	add ax, [cs:global_far_pointer.seg]	; Adjust entry point as well.
-	mov [si], ax					; Store it back
+	mov [si], ax						; Store it back
 
 	; Install the new int 0x21 handler.
 install_int_21:
-	push ds							; Save ds
-	sub ax, ax						; Zero ax
-	mov ds, ax						; IVT is in segment 0x0000
-	mov [0x86], cs					; interrupt_21h is located in segment 0x0000
-	mov word [0x84], interrupt_21h	; And also do the offset
-	pop ds							; Restore ds, the interrupt is installed.
+	push ds								; Save ds
+	sub ax, ax							; Zero ax
+	mov ds, ax							; IVT is in segment 0x0000
+	mov [0x21*4+2], cs					; interrupt_21h is located in segment 0x0000
+	mov word [0x21*4], interrupt_21h	; And also do the offset
+	pop ds								; Restore ds, the interrupt is installed.
 
 	; Get ready for a far jump to our exe!
 
 	; Set stack to what the EXE wants.
-	mov ax, [0xe]					; ax = preferred stack segment pEXE.ss
+	mov ax, [pExe.ss]					; ax = preferred stack segment pExe.ss
 	add ax, [cs:global_far_pointer.seg]	; Adjust the preferred stack segment to absolute terms.
-	cli								; Don't want interrupts while doing this
-	mov ss, ax						; Set stack segment to preferred pEXE.ss
-	mov sp, [0x10]					; Set stack segment to preferred pEXE.sp
-	sti								; Done setting stack, turn interrupts back on.
+	cli									; Don't want interrupts while doing this
+	mov ss, ax							; Set stack segment to preferred pExe.ss
+	mov sp, [pExe.sp]					; Set stack segment to preferred pExe.sp
+	sti									; Done setting stack, turn interrupts back on.
 
-	jmp far [0x14]					; Jump to the entry point in the header.
+	jmp far [pExe.entry]				; Jump to the entry point in the header. jmp far [pExe.Entry]
 
 
 ;=========================================================================
-; Called to load the executive.
+; Called to load a file into ram.
 ; 
-; Uses a global struct at cs:global_file_source to fetch the data from disk.
-; Always loads data to 0280:0000.
+; Parameters (all globals): global_ram_destination, global_file_source
+;
+; cs:global_file_source where to fetch the data from disk.
+; cs:global_ram_destination is a far pointer to where the fole is saved.
+;
+; Sets CF on error, CF clear on success.
+; 
 ;=========================================================================
 
 fn_load_file:
@@ -266,7 +273,7 @@ fn_load_file:
 		jz .sect9_loads
 
 	.load_next_batch:
-		mov byte [local_retries_left], 0x3				; Probably a countdown?
+		mov byte [local_retries_left], 0x3				; How many tries before failing each disk read.
 
 	.load_part_one:
 
@@ -315,7 +322,7 @@ fn_load_file:
 		jnz .load_next_batch
 
 
-	; Once we've loaded the 32 cylinders (cyl 1 through cyl 32), we get here.
+	; Once we've finished loading the cylinders with sectors 1-8, we get here.
 	; Or if nCylinders == 0 at the very beginning, skip to here.
 
 	.sect9_loads:
@@ -359,8 +366,9 @@ fn_load_file:
 		inc byte [global_file_source.sect9cyl]		; Advance cylinder to next
 		dec byte [global_file_source.nSect9cyl]		; nSect9cyl--
 		jnz .label_0000_1264
-
+		
 	.check_for_nBytes_at_end:
+		; This is the last section. If we have any bytes. read in the sector from disk and copy just those bytes out.
 		cmp word [global_file_source.nBytesLastSect], byte +0x0	; If nBytesLastSect is zero, skip ahead to success.
 		jz .exit_success
 		mov byte [local_retries_left], 0x3
@@ -437,9 +445,9 @@ interrupt_21h:
 		push ds
 		push es
 		
-		; Save 
-		mov [cs:global_ram_destination.off], dx		; [global_ram_destination.off] = dx
-		mov [cs:global_ram_destination.seg], ds		; [global_ram_destination.seg] = ds
+		; Save global_ram_destination = ds:dx
+		mov [cs:global_ram_destination.off], dx
+		mov [cs:global_ram_destination.seg], ds
 
 		sti
 		
