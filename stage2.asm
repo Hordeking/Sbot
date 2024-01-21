@@ -17,13 +17,12 @@ pExe equ 0x280		; Segment pointer to loaded Exe. Original Spiderbot used 0x280
 jmp begin
 
 ; Data block
-	times 0x8f dw 0
 
-	pStack dw 0		; pStack points at 0x1121, and is currently empty/invalid. 
-	; Why doesn't pStack point at 0x1120? That's aligned to 4 bytes.
+	; Why doesn't pStack point at 0x1120 or 0x1122? That's aligned to 2 bytes.
+	times 0x8f dw 0
+	pStack dw 0		; pStack points at 0x1121, and is currently empty/invalid.
 	
-	; The extra byte is unknown, is at 0x1123.	
-	db 0	; DATA_0000_1123, no references to it.
+	db 0	; Padding to align to even byte
 
 	global_retry_count db 0	; How many times to retry a file read.
 
@@ -422,17 +421,20 @@ fn_load_file:
 		ret
 
 ;======================================================
-; This appears to be replacing int 0x21
+; int 0x21: Spiderbot's custom read-file ISR
 ;
-; AL = Valid inputs 0, 1, 2, 3, 4
+; AL = Valid inputs 0, 1, 2, 3, 4 (index into ondisk_files[AL] array)
 ; DS = target seg
 ; DX = target offset
 ;
+; Outputs: CF set if error?
+;
+; This ISR is called by several functions when they load
+;	files from the native "file system". There are only
+;	five possible files. Technically six, but this ISR
+;	can't be called with AL=-1 to load the MZ.
+;
 ;======================================================
-
-; Notes: It looks like whoever calls int 21h has to set up an
-; global_file_source structure at offset 0x223, 0x22a, 0x231, or 0x38.
-; It's the same format as used by the default bootloader.
 
 interrupt_21h:
 		
