@@ -38,7 +38,7 @@ jmp begin
 	times 2 db 0
 
 	; TODO: Make local_retries_left local to fn_load_file
-	local_retries_left db 0						; Possibly a countdown. Set to 3 in fn_load_file if .nCylinders != 0
+	local_retries_left db 0						; Used in fn_load_file. Set to 3 if .nCylinders != 0
 
 	; This is used by fn_load_file in the manner of a global struct to know where to put the loaded data.
 	; The whoever calls fn_load_file needs to set these before calling it.
@@ -230,7 +230,7 @@ install_int_21:
 ; Parameters (all globals): global_ram_destination, global_file_source
 ;
 ; cs:global_file_source where to fetch the data from disk.
-; cs:global_ram_destination is a far pointer to where the fole is saved.
+; cs:global_ram_destination is a far pointer to where the file is saved.
 ;
 ; Sets CF on error, CF clear on success.
 ; 
@@ -453,7 +453,7 @@ interrupt_21h:
 
 		sti
 		
-		; Using "tiny" model for this interrupt, I guess.
+		; Using "tiny" model for this interrupt.
 		; CS = 0x0000
 		mov dx, cs	
 		mov es, dx
@@ -466,7 +466,7 @@ interrupt_21h:
 		mov cl, 0x7
 		mul cl								; ax = al*0x07 = {0x00, 0x07, 0x0E, 0x15, 0x1c}
 		add ax, ondisk_files				; ax = {1140, 1147, 114E, 1155, 115C}
-		mov [cs:global_far_pointer.offset], ax	; Set the offset to one of these particular values
+		mov [cs:global_far_pointer.offset], ax	; The pointer is now pointed at one of the ondisk files.
 
 		; At this point, cs:global_far_pointer.offset should be pointing at file[0-4]'s location.
 
@@ -482,7 +482,7 @@ interrupt_21h:
 		rep movsb
 
 		; fn_load_file(global_ram_destination, global_file_source)
-		call fn_load_file		; Load executive from wherever whoever called int 21h wants to I guess.
+		call fn_load_file		; Loads the file to wherever the caller wants.
 		jnc .clean_up_and_exit
 		dec byte [global_retry_count]
 		jnz .read_from_disk
