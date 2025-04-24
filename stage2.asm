@@ -21,7 +21,7 @@ jmp begin
 	; Why doesn't pStack point at 0x1120 or 0x1122? That's aligned to 2 bytes.
 	times 0x8f dw 0
 	pStack dw 0		; pStack points at 0x1121, and is currently empty/invalid.
-	
+
 	db 0	; Padding to align to even byte
 
 	global_retry_count db 0	; How many times to retry a file read.
@@ -126,7 +126,7 @@ executive_was_loaded:
 	%define pExe.reloc_table_offset 0x18
 
 	cld
-	
+
 	; Basic MZ Exe structure: Header{Options, Relocation_Table}, Payload
 
 	; Read the exe header, compute the absolute segment where the payload starts
@@ -165,7 +165,7 @@ executive_was_loaded:
 ;
 ; Offsets don't change, only segments.
 ;
-; In essence, we are going to dereference absolute_pointer = local_pointer+(local_reference-new_referemce)
+; In essence, we are going to dereference absolute_pointer = local_pointer+(local_reference-new_reference)
 ;  local reference is just wherever the header ends in ram, and we want our new reference to be memory location 0.
 ;
 ; Example: Our local pointer is 0410:0018, our exe was loaded at 0280:0000, and our header is 0x20 paragraphs long.
@@ -365,7 +365,7 @@ fn_load_file:
 		inc byte [global_file_source.sect9cyl]		; Advance cylinder to next
 		dec byte [global_file_source.nSect9cyl]		; nSect9cyl--
 		jnz .label_0000_1264
-		
+
 	.check_for_nBytes_at_end:
 		; This is the last section. If we have any bytes. read in the sector from disk and copy just those bytes out.
 		cmp word [global_file_source.nBytesLastSect], byte +0x0	; If nBytesLastSect is zero, skip ahead to success.
@@ -437,7 +437,7 @@ fn_load_file:
 ;======================================================
 
 interrupt_21h:
-		
+
 		; Save the registers (are PUSHA and PUSHF not available?)
 		push bx
 		push cx
@@ -446,19 +446,19 @@ interrupt_21h:
 		push di
 		push ds
 		push es
-		
+
 		; Save global_ram_destination = ds:dx
 		mov [cs:global_ram_destination.off], dx
 		mov [cs:global_ram_destination.seg], ds
 
 		sti
-		
+
 		; Using "tiny" model for this interrupt.
 		; CS = 0x0000
-		mov dx, cs	
+		mov dx, cs
 		mov es, dx
 		mov ds, dx
-		
+
 		sub ah, ah							; Zero out AH
 		cmp al, 0x4
 		ja .clean_up_and_exit				; Apparently valid ax = {0,1,2,3,4}
