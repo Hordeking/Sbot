@@ -14,6 +14,8 @@ org 0x1000
 
 pExe equ 0x280		; Segment pointer to loaded Exe. Original Spiderbot used 0x280
 
+%include "filesystem.inc"
+
 jmp begin
 
 ; Data block
@@ -21,6 +23,9 @@ jmp begin
 	; Why doesn't pStack point at 0x1120 or 0x1122? That's aligned to 2 bytes.
 	times 0x8f dw 0
 	pStack dw 0		; pStack points at 0x1121, and is currently empty/invalid.
+					; This non-alignment is due to the fact that the the jump
+					; is three bytes long, throwing the alignment of the stack.
+					; This needs to be remedied in newer editions.
 
 	db 0	; Padding to align to even byte
 
@@ -47,6 +52,7 @@ jmp begin
 		.seg dw 0x200					; gets loaded into register es later
 
 	; This is used by fn_load_file in the manner of a global struct to know where to load from.
+	; This structure is pre-initialized with the pointer for the executive, but that never gets used.
 	; The whoever calls fn_load_file needs to copy data here before calling it.
 	global_file_source:
 		.cylinder			db 0x01		; CHS Cylinder where data is
@@ -65,14 +71,14 @@ jmp begin
 
 	; These are the pointers to the files used in this game.
 	ondisk_mz_exec:
-				db 0x01, 0x00, 0x21, 0x01, 0x1a, 0x80, 0x00		; The main executive
+				sbotfile 0x01, 0x00, 0x21, 0x01, 0x1a, 0x0080		; The main executive
 
 	ondisk_files:
-		file0	db 0x23, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00		; Splash screen
-		file1	db 0x22, 0x00, 0x01, 0x22, 0x01, 0x38, 0x00
-		file2	db 0x01, 0x01, 0x0d, 0x01, 0x07, 0x62, 0x00
-		file3	db 0x0e, 0x01, 0x0f, 0x0e, 0x06, 0x74, 0x01
-		file4	db 0x1d, 0x01, 0x09, 0x1d, 0x07, 0x5d, 0x00
+		file0	sbotfile 0x23, 0x00, 0x04, 0x00, 0x00, 0x0000		; Splash screen
+		file1	sbotfile 0x22, 0x00, 0x01, 0x22, 0x01, 0x0038
+		file2	sbotfile 0x01, 0x01, 0x0d, 0x01, 0x07, 0x0062
+		file3	sbotfile 0x0e, 0x01, 0x0f, 0x0e, 0x06, 0x0174
+		file4	sbotfile 0x1d, 0x01, 0x09, 0x1d, 0x07, 0x005d
 
 ; Code begins in earnest
 begin:
@@ -238,16 +244,16 @@ install_int_21:
 
 fn_load_file:
 
-	; Load the executive from disk.
+	; Load a file from disk.
 	; Returns 0 if successful, 1 if fail
 	; Additionally sets the carry bit on fail.
 
-	; This function appears to be responsible for loading the executive
+	; This function is responsible for loading the files from disk.
 	; Technically, the caller should be pushing the args onto the stack
 	; and cleaning up afterwards, not using globals to pass around things.
 
-	; The executive is stored in an odd format, and this subroutine basically
-	; builds the executive from the blocks on the disk like this:
+	; The files are stored in an odd format, and this subroutine basically
+	; builds them from the blocks on the disk like this:
 
 	; From cylinders 1-33, it works upward through each cylinder, placing the first 8
 	; sectors of each cylinder consecutively in memory at the target location.
@@ -256,7 +262,7 @@ fn_load_file:
 	; one further 9th sector one cylinder out, but this is a partial sector, so
 	; we only copy the last nBytesLastSect from the buffer after reading that sector.
 
-	; Once the executive is built, it still needs to have its relocation done.
+	; If the file was the executive, it still needs to have its relocation done.
 	; This sub doesn't handle that.
 
 		; Save ds, es
@@ -277,7 +283,7 @@ fn_load_file:
 	.load_part_one:
 
 		; We're going to copy sectors from the disk to our target location.
-		; This is probably the REAL executive.
+
 		mov dh, [global_file_source.head]				; Copy head (head) into dh
 		mov dl, 0x0									; dl = 0 (disk 0x00 aka first floppy)
 		mov ch, [global_file_source.cylinder]			; Copy cylinder (cylinder) into ch
@@ -470,7 +476,7 @@ interrupt_21h:
 
 		; At this point, cs:global_far_pointer.offset should be pointing at file[0-4]'s location.
 
-		mov byte [cs:global_retry_count], 0xa	; Set up to retry loading the exec 10 times.
+		mov byte [cs:global_retry_count], 0xa	; Set up to retry loading the file 10 times.
 
 	.read_from_disk:
 
