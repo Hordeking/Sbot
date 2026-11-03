@@ -10,6 +10,7 @@
 ; is stored.
 
 bits 16
+cpu 8086
 org 0x1000
 
 pExe equ 0x280		; Segment pointer to loaded Exe. Original Spiderbot used 0x280
@@ -17,16 +18,18 @@ pExe equ 0x280		; Segment pointer to loaded Exe. Original Spiderbot used 0x280
 %include "filesystem.inc"
 
 jmp begin
+; They should have had a nop here for padding.
 
 ; Data block
 
 	; Why doesn't pStack point at 0x1120 or 0x1122? That's aligned to 2 bytes.
-	times 0x8f dw 0
-	pStack dw 0		; pStack points at 0x1121, and is currently empty/invalid.
-					; This non-alignment is due to the fact that the the jump
-					; is three bytes long, throwing the alignment of the stack.
-					; This needs to be remedied in newer editions.
-
+	[warning -zeroing]
+		resw 0x8f		; Bottom of stack is at 0x1121, and starts out empty/invalid.
+	pStack:				; This non-alignment is due to the fact that the the jump
+						; is three bytes long, throwing the alignment of the stack.
+						; This needs to be remedied in newer editions.
+	[warning +zeroing]
+	dw 0	; Padding, but technically the stack points at it.
 	db 0	; Padding to align to even byte
 
 	global_retry_count db 0	; How many times to retry a file read.
@@ -88,9 +91,9 @@ begin:
 	mov es, ax
 
 	; Set the stack pointer (stack size: 0x120)
-	; (Why isn't the stack pointer aligned to a 4B boundary?)
+	; (Why didn't they make the stack pointer aligned to a 2 byte boundary?)
 	cli
-	mov bx, pStack
+	mov bx, pStack		; Stack is currently empty. Nothing has been pushed to it yet.
 	mov sp, bx
 	mov ss, ax
 	sti
