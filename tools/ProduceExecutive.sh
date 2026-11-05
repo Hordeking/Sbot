@@ -9,7 +9,7 @@
 # disk images and other fully linear storage.
 
 # On disk, the data is stored in 512B sectors.
-# However, we can't just address it by the sector
+# However, we can't just address it by the LBA
 # number like we would on a SD card. The floppy
 # controller was pretty primitive, and it just
 # operated the motors on the disk and decoded/wrote
@@ -17,7 +17,7 @@
 # the bios functions to access the disk, or you
 # had to write your own driver.
 
-# The bios was stock function is pretty basic,
+# The bios stock function is pretty basic,
 # and uses what amounts to cylindrical coords
 # to determine how to operate the motors.
 # Cylinder# is a bit like radius, track# is
@@ -27,7 +27,8 @@
 # as many cylinders as the disk can fit, but 360k
 # floppies had 40 cylinders. Each side of each cyl
 # has 9 sectors, numbered 1-9 (modern expectation is
-# 0-8). Spiderbot stores things a little non-consec.
+# 0-8). Spiderbot stores things a little non-consec,
+# and files are restricted to one head or the other.
 
 # The process is:
 # For each cylinder 1-33, read the first 8 sectors.
