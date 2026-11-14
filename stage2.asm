@@ -30,7 +30,7 @@ jmp begin
 						; This needs to be remedied in newer editions.
 	[warning +zeroing]
 	dw 0	; Padding, but technically the stack points at it.
-	db 0	; Padding to align to even byte
+	db 1	; Padding to align to even byte. Not sure why it has this value.
 
 	global_retry_count db 0	; How many times to retry a file read.
 
@@ -40,7 +40,7 @@ jmp begin
 	; The primary use is to determine the segment the exe data actually starts at (to do the relocations)
 	; It's also used in the interrupt handler as a destination for the loaded file.
 	global_far_pointer:
-		.seg dw 0		; Used to store pExe+pEXE.headerlength. Also used in int 21h.
+		.seg dw 0		; Used to store pExe+MZHeader.headerlength. Also used in int 21h.
 		.offset dw 0	; Used by int 21h that this bootloader sets up.
 
 	times 2 db 0
@@ -126,33 +126,46 @@ retrieve_mz_exec:
 ; We're reading the exe and making adjustments to the far pointers in it.
 executive_was_loaded:
 
-	%define pExe.nRelocations 0x06
-	%define pExe.sizeHeader 0x08
-	%define pExe.ss 0x0e
-	%define pExe.sp 0x10
-	%define pExe.entry 0x14
-	%define pExe.cs 0x16
-	%define pExe.reloc_table_offset 0x18
+	; Basic MZ Exe structure: Header{Options, Relocation_Table}, Payload
+	struc MZHeader
+		.magic				resw 1	; Magic Number: MZ
+		.cblp				resw 1	; Bytes in last page (0 if entire last page is used)
+		.nPages				resw 1	; 512B Pages in file
+		.nRelocations		resw 1	; Number of relocation entries
+		.sizeHeader			resw 1  ; Header size in 16-byte paragraphs
+		.minalloc			resw 1	; Minimum extra paragraphs required
+		.maxalloc			resw 1	; Maximum extra paragraphs requested
+		.ss					resw 1	; Initial relative SS
+		.sp					resw 1	; Initial SP
+		.cksum				resw 1	; Checksum
+		.ip					resw 1	; Initial IP
+		.cs					resw 1	; Initial relative CS
+		.reloc_table_offset	resw 1	; Offset to relocation table
+		.OverlayNum			resw 1	; Overlay number
+	endstruc
+
+	struc MZReloc		; More or less standard far pointers.
+		.off	resw 1	; Offset
+		.seg	resw 1	; Segment
+	endstruc
 
 	cld
-
-	; Basic MZ Exe structure: Header{Options, Relocation_Table}, Payload
 
 	; Read the exe header, compute the absolute segment where the payload starts
 	mov ax, pExe
 	mov ds, ax
-	mov si, pExe.sizeHeader
-	lodsw							; Load word from ds:si = pExe:0008
-	add ax, pExe					; ax = pExe + [pExe:0008]
-	mov [cs:global_far_pointer.seg], ax		; global_far_pointer.seg = pExe + pExe.sizeHeader
+	mov si, MZHeader.sizeHeader
+	lodsw							; Load word from ds:si = pExe:sizeHeader
+	add ax, pExe					; ax = pExe + [pExe:sizeHeader]
+	mov [cs:global_far_pointer.seg], ax		; global_far_pointer.seg = pExe + [sizeHeader]
 
-	mov si, pExe.nRelocations
-	lodsw							; Load word from ds:si = pExe:0006
-	mov cx, ax						; cx = pExe.num_relocs
+	mov si, MZHeader.nRelocations
+	lodsw							; Load word from ds:si = pExe:nRelocations
+	mov cx, ax						; cx = [pEXE:nRelocations]
 
-	mov si, pExe.reloc_table_offset	; ds:si = [pExe:reloc_table_offset]
-	lodsw							; ax = pExe + [pExe:0018]
-	mov si, ax						; si = [pExe.reloc_table_offset]
+	mov si, MZHeader.reloc_table_offset	; ds:si = pExe:reloc_table_offset
+	lodsw							; ax = [pExe:reloc_table_offset]
+	mov si, ax						; si = [pExe:reloc_table_offset]
 
 
 ; reloc_table_offset[i] is an array of pointers.
@@ -195,10 +208,10 @@ adjust_relocations:
 	;	cx is set to the number of relocation entries
 
 	;This code cycles through each entry in the relocation table
-	mov ax, [si+0x2]					; Fetch relocation entry
+	mov ax, [si+MZReloc.seg]					; Fetch relocation entry
 	add ax, [cs:global_far_pointer.seg]	; Adjust it to account for the segment we loaded the file AND the paragraph length of the header
 	mov es, ax							; Now the relocation entry points at the actual segment in memory there the subject is
-	mov di, [si]						; Offset within that paragraph stays the same
+	mov di, [si+MZReloc.off]			; Offset within that paragraph stays the same
 	mov ax, [es:di]						; Retrieve the subject
 	add ax, [cs:global_far_pointer.seg]	; Offset the the subject by the same amount. This is the segment of a far reference.
 	stosw								; Store it back, adjusted.
@@ -206,7 +219,7 @@ adjust_relocations:
 	loop adjust_relocations				; One down, get the next one that we just pointed at.
 
 	;This bit also adjusts the entry point in the header itself
-	mov si, pExe.cs
+	mov si, MZHeader.cs
 	mov ax, [si]						; ax = *(pEXE+0x16) = 0x410
 	add ax, [cs:global_far_pointer.seg]	; Adjust entry point as well.
 	mov [si], ax						; Store it back
@@ -217,20 +230,20 @@ install_int_21:
 	sub ax, ax							; Zero ax
 	mov ds, ax							; IVT is in segment 0x0000
 	mov [0x21*4+2], cs					; interrupt_21h is located in segment 0x0000
-	mov word [0x21*4], interrupt_21h	; And also do the offset
+	mov word [0x21*4+0], interrupt_21h	; And also do the offset
 	pop ds								; Restore ds, the interrupt is installed.
 
 	; Get ready for a far jump to our exe!
 
 	; Set stack to what the EXE wants.
-	mov ax, [pExe.ss]					; ax = preferred stack segment pExe.ss
+	mov ax, [MZHeader.ss]				; ax = preferred stack segment MZHeader.ss
 	add ax, [cs:global_far_pointer.seg]	; Adjust the preferred stack segment to absolute terms.
 	cli									; Don't want interrupts while doing this
-	mov ss, ax							; Set stack segment to preferred pExe.ss
-	mov sp, [pExe.sp]					; Set stack segment to preferred pExe.sp
+	mov ss, ax							; Set stack segment to preferred MZHeader.ss
+	mov sp, [MZHeader.sp]				; Set stack segment to preferred MZHeader.sp
 	sti									; Done setting stack, turn interrupts back on.
 
-	jmp far [pExe.entry]				; Jump to the entry point in the header. jmp far [pExe.Entry]
+	jmp far [MZHeader.ip]				; Jump to the entry point in the header. jmp far [MZHeader.ip]
 
 
 ;=========================================================================
