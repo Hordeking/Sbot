@@ -159,14 +159,12 @@ executive_was_loaded:
 	add ax, pExe					; ax = pExe + [pExe:sizeHeader]
 	mov [cs:global_far_pointer.seg], ax		; global_far_pointer.seg = pExe + [sizeHeader]
 
-	mov si, MZHeader.nRelocations
-	lodsw							; Load word from ds:si = pExe:nRelocations
-	mov cx, ax						; cx = [pEXE:nRelocations]
+adjust_relocations:
 
-	mov si, MZHeader.reloc_table_offset	; ds:si = pExe:reloc_table_offset
-	lodsw							; ax = [pExe:reloc_table_offset]
-	mov si, ax						; si = [pExe:reloc_table_offset]
-
+; Parameters:
+; 	cs:temp_far_pointer.seg = the payload begin paragraph
+;	ds:si points at the first relocation etable entry
+;	cx is set to the number of relocation entries
 
 ; reloc_table_offset[i] is an array of pointers.
 ;
@@ -200,12 +198,20 @@ executive_was_loaded:
 ;  In the example above, Local 0410:0018 (absolute 06b0:0018) points at a far pointer 0d38:xxxx (local).
 ;  Adjusted, it becomes 1088:xxxx (absolute).
 
-adjust_relocations:
+	mov si, MZHeader.nRelocations
+	lodsw							; Load word from ds:si = pExe:nRelocations
+	mov cx, ax						; cx = [pEXE:nRelocations]
 
-	; Parameters:
-	; 	cs:global_far_pointer.seg = the payload begin paragraph
-	;	ds:si points at the first relocation etable entry
-	;	cx is set to the number of relocation entries
+	; There's a minor bug here. They don't check for zero relocation entries.
+	; Doesn't show up for the MZ packaged on-disk, because it has relocation entries.
+	; This line was not in the original code, and is more of a reminder.
+	; jcxz .finished				; Check for nRelocations == 0
+
+	mov si, MZHeader.reloc_table_offset	; ds:si = pExe:reloc_table_offset
+	lodsw							; ax = [pExe:reloc_table_offset]
+	mov si, ax						; si = [pExe:reloc_table_offset]
+
+	.begin:
 
 	;This code cycles through each entry in the relocation table
 	mov ax, [si+MZReloc.seg]					; Fetch relocation entry
@@ -217,6 +223,8 @@ adjust_relocations:
 	stosw								; Store it back, adjusted.
 	add si, byte +0x4					; Increment which relocation table entry we're pointing at.
 	loop adjust_relocations				; One down, get the next one that we just pointed at.
+
+	.finished:
 
 	;This bit also adjusts the entry point in the header itself
 	mov si, MZHeader.cs
